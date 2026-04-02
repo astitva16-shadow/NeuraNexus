@@ -79,6 +79,16 @@ def _wide_kwargs(widget_fn: Any) -> Dict[str, Any]:
     return {}
 
 
+def _nav_private_set(page: str) -> None:
+    """Safely set the authenticated navigation target.
+
+    Must be invoked via widget callbacks (on_click) so the value is applied
+    before the `nav_private` radio widget is instantiated.
+    """
+
+    st.session_state["nav_private"] = str(page)
+
+
 # -------------------------------
 # Database layer (SQLite)
 # -------------------------------
@@ -1054,9 +1064,13 @@ def page_dashboard() -> None:
             with c1:
                 st.write("Schedule a consultation to get guided support.")
             with c2:
-                if st.button("👉 Book Now", key="dash_book_now", **_wide_kwargs(st.button)):
-                    st.session_state["nav_private"] = "📅 Book Appointment"
-                    _rerun()
+                st.button(
+                    "👉 Book Now",
+                    key="dash_book_now",
+                    on_click=_nav_private_set,
+                    args=("📅 Book Appointment",),
+                    **_wide_kwargs(st.button),
+                )
 
     band_cols = st.columns(3)
     with band_cols[0]:
@@ -1363,9 +1377,13 @@ def page_support() -> None:
             st.error("Urgent consultation recommended.")
         else:
             st.warning("Elevated stress detected. Consider booking a consultation.")
-        if st.button("👉 Book Now", key="support_book_now", **_wide_kwargs(st.button)):
-            st.session_state["nav_private"] = "📅 Book Appointment"
-            _rerun()
+        st.button(
+            "👉 Book Now",
+            key="support_book_now",
+            on_click=_nav_private_set,
+            args=("📅 Book Appointment",),
+            **_wide_kwargs(st.button),
+        )
 
     c1, c2 = st.columns([1.2, 1.0])
 
@@ -1492,23 +1510,37 @@ def top_hamburger_nav(current_page: str) -> None:
                 with st.popover("☰"):
                     st.caption("Navigation")
                     for i, item in enumerate(nav_items):
-                        if st.button(item, key=f"topnav_item_{i}", **_wide_kwargs(st.button)):
-                            st.session_state["nav_private"] = item
-                            _rerun()
+                        st.button(
+                            item,
+                            key=f"topnav_item_{i}",
+                            on_click=_nav_private_set,
+                            args=(item,),
+                            **_wide_kwargs(st.button),
+                        )
                     st.markdown("---")
-                    if st.button("🚪 Logout", key="topnav_logout", **_wide_kwargs(st.button)):
-                        logout()
-                        _rerun()
+                    st.button(
+                        "🚪 Logout",
+                        key="topnav_logout",
+                        on_click=logout,
+                        **_wide_kwargs(st.button),
+                    )
             else:  # pragma: no cover
                 with st.expander("☰ Menu", expanded=False):
                     for i, item in enumerate(nav_items):
-                        if st.button(item, key=f"topnav_item_{i}", **_wide_kwargs(st.button)):
-                            st.session_state["nav_private"] = item
-                            _rerun()
+                        st.button(
+                            item,
+                            key=f"topnav_item_{i}",
+                            on_click=_nav_private_set,
+                            args=(item,),
+                            **_wide_kwargs(st.button),
+                        )
                     st.markdown("---")
-                    if st.button("🚪 Logout", key="topnav_logout", **_wide_kwargs(st.button)):
-                        logout()
-                        _rerun()
+                    st.button(
+                        "🚪 Logout",
+                        key="topnav_logout",
+                        on_click=logout,
+                        **_wide_kwargs(st.button),
+                    )
 
         with c2:
             st.markdown(f"**{APP_TITLE}**")
@@ -1548,9 +1580,7 @@ def sidebar_nav() -> str:
     current = st.sidebar.radio("Navigate", nav_items, key="nav_private")
 
     st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 Logout", **_wide_kwargs(st.sidebar.button)):
-        logout()
-        _rerun()
+    st.sidebar.button("🚪 Logout", on_click=logout, **_wide_kwargs(st.sidebar.button))
 
     return str(current)
 
