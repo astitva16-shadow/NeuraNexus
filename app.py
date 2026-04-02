@@ -1464,6 +1464,61 @@ def page_resources() -> None:
         st.write("• Thoughts of self-harm — seek immediate help")
 
 
+def top_hamburger_nav(current_page: str) -> None:
+    """Render an in-app top hamburger navigation control.
+
+    This ensures navigation is visible even when Streamlit's built-in header
+    chrome is hidden for a more app-like UI.
+    """
+
+    if not st.session_state.get("authenticated"):
+        return
+
+    nav_items = [
+        "🏠 Dashboard",
+        "🕒 History",
+        "📅 Book Appointment",
+        "📋 My Appointments",
+        "🤝 Support",
+    ]
+
+    user = st.session_state.get("user") or {}
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([0.12, 0.62, 0.26])
+
+        with c1:
+            if hasattr(st, "popover"):
+                with st.popover("☰"):
+                    st.caption("Navigation")
+                    for i, item in enumerate(nav_items):
+                        if st.button(item, key=f"topnav_item_{i}", **_wide_kwargs(st.button)):
+                            st.session_state["nav_private"] = item
+                            _rerun()
+                    st.markdown("---")
+                    if st.button("🚪 Logout", key="topnav_logout", **_wide_kwargs(st.button)):
+                        logout()
+                        _rerun()
+            else:  # pragma: no cover
+                with st.expander("☰ Menu", expanded=False):
+                    for i, item in enumerate(nav_items):
+                        if st.button(item, key=f"topnav_item_{i}", **_wide_kwargs(st.button)):
+                            st.session_state["nav_private"] = item
+                            _rerun()
+                    st.markdown("---")
+                    if st.button("🚪 Logout", key="topnav_logout", **_wide_kwargs(st.button)):
+                        logout()
+                        _rerun()
+
+        with c2:
+            st.markdown(f"**{APP_TITLE}**")
+            st.caption(str(current_page))
+
+        with c3:
+            st.markdown(f"**{user.get('name','')}**")
+            st.caption(user.get("email", ""))
+
+
 def sidebar_nav() -> str:
     if not st.session_state.get("authenticated"):
         return str(st.session_state.get("nav_public", "🔐 Login"))
@@ -1521,6 +1576,7 @@ def main() -> None:
         return
 
     page = sidebar_nav()
+    top_hamburger_nav(page)
 
     if page == "🏠 Dashboard":
         page_dashboard()
