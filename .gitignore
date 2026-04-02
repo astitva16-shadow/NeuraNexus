@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Local app data
+neuraneux.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Editors/OS
+.DS_Store
+.vscode/
