@@ -650,6 +650,12 @@ def inject_css() -> None:
                     footer { visibility: hidden; }
                     header { visibility: hidden; }
 
+                    /* Keep the sidebar hamburger visible for navigation */
+                    [data-testid="collapsedControl"] {
+                        visibility: visible;
+                        pointer-events: auto;
+                    }
+
           /* Cards */
           .nn-card {
             background: rgba(255, 255, 255, 0.04);
