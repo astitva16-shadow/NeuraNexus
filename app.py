@@ -10,7 +10,7 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -136,6 +136,26 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_eeg_logs_user_ts
             ON eeg_logs(user_id, timestamp)
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS appointments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_email TEXT NOT NULL,
+                date TEXT NOT NULL,
+                time_slot TEXT NOT NULL,
+                consultation_type TEXT NOT NULL,
+                notes TEXT,
+                status TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_appointments_user_date
+            ON appointments(user_email, date)
             """
         )
 
@@ -482,6 +502,134 @@ def fetch_history(user_id: int, *, limit: int = 2000) -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
     df = df.sort_values("timestamp")
     return df
+
+
+# -------------------------------
+# Appointments (SQLite)
+# -------------------------------
+
+
+TIME_SLOTS: Tuple[str, ...] = ("Morning", "Afternoon", "Evening")
+CONSULTATION_TYPES: Tuple[str, ...] = ("Stress Counseling", "Mental Wellness", "Emergency Support")
+APPOINTMENT_STATUSES: Tuple[str, ...] = ("Scheduled", "Completed", "Cancelled")
+
+
+def create_appointment(
+    *,
+    user_email: str,
+    appt_date: str,
+    time_slot: str,
+    consultation_type: str,
+    notes: str,
+    status: str = "Scheduled",
+) -> Tuple[bool, str, Optional[int]]:
+    """Create an appointment. Returns (success, message, appointment_id)."""
+
+    user_email = (user_email or "").strip().lower()
+    appt_date = (appt_date or "").strip()
+    time_slot = (time_slot or "").strip()
+    consultation_type = (consultation_type or "").strip()
+    notes = (notes or "").strip()
+    status = (status or "").strip()
+
+    if not user_email or not EMAIL_RE.match(user_email):
+        return False, "Invalid user email.", None
+    if not appt_date:
+        return False, "Please select a valid date.", None
+    if time_slot not in TIME_SLOTS:
+        return False, "Please select a valid time slot.", None
+    if consultation_type not in CONSULTATION_TYPES:
+        return False, "Please select a valid consultation type.", None
+    if status not in APPOINTMENT_STATUSES:
+        return False, "Invalid appointment status.", None
+
+    try:
+        with db_conn() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO appointments (user_email, date, time_slot, consultation_type, notes, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (user_email, appt_date, time_slot, consultation_type, notes, status),
+            )
+            appt_id = int(cur.lastrowid)
+        return True, "Your appointment has been successfully scheduled.", appt_id
+    except Exception:
+        return False, "Could not book appointment. Please try again.", None
+
+
+def fetch_appointments(user_email: str) -> pd.DataFrame:
+    """Fetch all appointments for a user."""
+
+    user_email = (user_email or "").strip().lower()
+    if not user_email:
+        return pd.DataFrame(columns=["id", "user_email", "date", "time_slot", "consultation_type", "notes", "status"])
+
+    with db_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_email, date, time_slot, consultation_type, notes, status
+            FROM appointments
+            WHERE user_email = ?
+            ORDER BY
+                date ASC,
+                CASE time_slot
+                    WHEN 'Morning' THEN 0
+                    WHEN 'Afternoon' THEN 1
+                    WHEN 'Evening' THEN 2
+                    ELSE 3
+                END ASC,
+                id DESC
+            """,
+            (user_email,),
+        ).fetchall()
+
+    if not rows:
+        return pd.DataFrame(columns=["id", "user_email", "date", "time_slot", "consultation_type", "notes", "status"])
+
+    return pd.DataFrame([dict(r) for r in rows])
+
+
+def cancel_appointment(*, appointment_id: int, user_email: str) -> Tuple[bool, str]:
+    """Cancel a scheduled appointment for the given user."""
+
+    user_email = (user_email or "").strip().lower()
+    try:
+        with db_conn() as conn:
+            cur = conn.execute(
+                """
+                UPDATE appointments
+                SET status = 'Cancelled'
+                WHERE id = ? AND user_email = ? AND status = 'Scheduled'
+                """,
+                (int(appointment_id), user_email),
+            )
+        if int(cur.rowcount or 0) == 0:
+            return False, "Could not cancel: appointment not found or not scheduled."
+        return True, "Appointment cancelled."
+    except Exception:
+        return False, "Could not cancel appointment. Please try again."
+
+
+def complete_appointment(*, appointment_id: int, user_email: str) -> Tuple[bool, str]:
+    """Mark a scheduled appointment as completed for the given user."""
+
+    user_email = (user_email or "").strip().lower()
+    try:
+        with db_conn() as conn:
+            cur = conn.execute(
+                """
+                UPDATE appointments
+                SET status = 'Completed'
+                WHERE id = ? AND user_email = ? AND status = 'Scheduled'
+                """,
+                (int(appointment_id), user_email),
+            )
+        if int(cur.rowcount or 0) == 0:
+            return False, "Could not update: appointment not found or not scheduled."
+        return True, "Appointment marked as completed."
+    except Exception:
+        return False, "Could not update appointment. Please try again."
 
 
 # -------------------------------
@@ -837,10 +985,38 @@ def page_dashboard() -> None:
     st.markdown("## 🏠 Dashboard")
     st.caption(f"Hello, **{name}**")
 
+    # Manual simulation controls (no auto-refresh).
+    with st.container(border=True):
+        st.markdown("### 🎛️ Generate Reading")
+        c1, c2 = st.columns([1.35, 0.65])
+        with c1:
+            intensity = st.slider(
+                "Simulation intensity",
+                min_value=0,
+                max_value=100,
+                value=35,
+                key="dash_intensity",
+                help="Higher intensity increases beta relative to alpha.",
+            )
+            save_to_history = st.checkbox("Save to History", value=True, key="dash_save_history")
+        with c2:
+            st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+            generate = st.button("Generate Reading", key="dash_generate", **_wide_kwargs(st.button))
+            st.caption("Manual simulation")
+
     reading = st.session_state.get("latest_reading") or _get_latest_reading_from_db(user_id)
 
+    if generate:
+        reading = generate_reading(stress_level=float(intensity) / 100.0)
+        _remember_reading(reading)
+        if save_to_history:
+            log_reading(user_id, reading)
+            _toast("Saved to history", icon="💾")
+        else:
+            _toast("Reading generated", icon="🧠")
+
     if reading is None:
-        st.info("No readings yet. Go to **Manual Simulation** to generate your first entry.")
+        st.info("Generate your first reading above to unlock insights and recommendations.")
         return
 
     # Top metrics
@@ -858,6 +1034,24 @@ def page_dashboard() -> None:
     badge(f"{reading['status']} • {reading['severity']}", emoji=reading.get("badge", "🧠"))
 
     _render_risk_banner(reading)
+
+    # Smart integration: recommend booking a consultation when stress is HIGH.
+    if str(reading.get("status")) == "HIGH":
+        urgent = float(reading.get("stress_index", 0.0)) > STRESS_THRESHOLD_SEVERE
+        with st.container(border=True):
+            if urgent:
+                st.error("Urgent consultation recommended (stress index > 2).")
+                st.caption("Emergency Support is recommended.")
+            else:
+                st.warning("We recommend booking a consultation.")
+
+            c1, c2 = st.columns([1.0, 0.35])
+            with c1:
+                st.write("Schedule a consultation to get guided support.")
+            with c2:
+                if st.button("👉 Book Now", key="dash_book_now", **_wide_kwargs(st.button)):
+                    st.session_state["nav_private"] = "📅 Book Appointment"
+                    _rerun()
 
     band_cols = st.columns(3)
     with band_cols[0]:
@@ -989,7 +1183,7 @@ def page_history() -> None:
     df = fetch_history(user_id, limit=2500)
 
     if df.empty:
-        st.info("No history yet. Generate entries using Manual Simulation.")
+        st.info("No history yet. Generate entries from the Dashboard.")
         return
 
     last_row = df.iloc[-1]
@@ -1007,6 +1201,223 @@ def page_history() -> None:
     show["timestamp"] = show["timestamp"].dt.tz_convert("UTC").dt.strftime("%Y-%m-%d %H:%M:%S UTC")
     show = show.tail(400)
     st.dataframe(show, hide_index=True, **_wide_kwargs(st.dataframe))
+
+
+def page_book_appointment() -> None:
+    st.markdown("## 📅 Book Appointment")
+    st.caption("Schedule a simulated consultation (stored locally in SQLite).")
+
+    user = st.session_state.get("user") or {}
+    name = str(user.get("name", ""))
+    email = str(user.get("email", "")).strip().lower()
+
+    user_id = int(st.session_state["user_id"])
+    reading = st.session_state.get("latest_reading") or _get_latest_reading_from_db(user_id)
+
+    urgent = False
+    suggested_type = "Mental Wellness"
+    if reading is not None and str(reading.get("status")) == "HIGH":
+        if float(reading.get("stress_index", 0.0)) > STRESS_THRESHOLD_SEVERE:
+            urgent = True
+            suggested_type = "Emergency Support"
+            st.error("Urgent consultation recommended based on your latest reading.")
+        else:
+            suggested_type = "Stress Counseling"
+            st.warning("We recommend booking a consultation based on your latest reading.")
+
+    if not email:
+        st.error("Missing user email. Please log in again.")
+        return
+
+    default_type_index = int(CONSULTATION_TYPES.index(suggested_type)) if suggested_type in CONSULTATION_TYPES else 1
+
+    with st.container(border=True):
+        with st.form("book_appt_form", border=False):
+            st.text_input("User Name", value=name, disabled=True)
+            st.text_input("Email", value=email, disabled=True)
+
+            c1, c2 = st.columns(2)
+            with c1:
+                appt_dt = st.date_input("Select Date", value=date.today())
+            with c2:
+                time_slot = st.selectbox("Select Time Slot", list(TIME_SLOTS), index=0)
+
+            consult_type = st.selectbox(
+                "Consultation Type",
+                list(CONSULTATION_TYPES),
+                index=default_type_index,
+                help="Emergency Support is recommended when stress index is very high.",
+            )
+            notes = st.text_area("Notes (optional)", height=90, placeholder="Any context you'd like to share...")
+            submitted = st.form_submit_button("Book Appointment", **_wide_kwargs(st.form_submit_button))
+
+    if submitted:
+        if appt_dt < date.today():
+            st.error("Please choose a future date (or today).")
+            return
+
+        if urgent and consult_type != "Emergency Support":
+            st.warning("Emergency Support is recommended for urgent cases.")
+
+        ok, msg, appt_id = create_appointment(
+            user_email=email,
+            appt_date=appt_dt.isoformat(),
+            time_slot=time_slot,
+            consultation_type=consult_type,
+            notes=notes,
+            status="Scheduled",
+        )
+
+        if not ok:
+            st.error(msg)
+            return
+
+        st.success(msg)
+        with st.container(border=True):
+            st.markdown("### ✅ Appointment Summary")
+            st.write(f"**Appointment ID:** #{appt_id}")
+            st.write(f"**Name:** {name}")
+            st.write(f"**Email:** {email}")
+            st.write(f"**Date:** {appt_dt.isoformat()}")
+            st.write(f"**Time Slot:** {time_slot}")
+            st.write(f"**Type:** {consult_type}")
+            st.write("**Status:** Scheduled")
+            if notes:
+                st.write(f"**Notes:** {notes}")
+
+
+def page_my_appointments() -> None:
+    st.markdown("## 📋 My Appointments")
+    st.caption("Manage your scheduled consultations.")
+
+    user = st.session_state.get("user") or {}
+    email = str(user.get("email", "")).strip().lower()
+    if not email:
+        st.error("Missing user email. Please log in again.")
+        return
+
+    df = fetch_appointments(email)
+    if df.empty:
+        st.info("No appointments yet. Use **Book Appointment** to schedule one.")
+        return
+
+    show = df[["id", "date", "time_slot", "consultation_type", "status"]].copy()
+    show = show.rename(columns={"consultation_type": "type"})
+    st.dataframe(show, hide_index=True, **_wide_kwargs(st.dataframe))
+
+    options: Dict[str, int] = {}
+    for _, row in show.iterrows():
+        label = f"#{int(row['id'])} • {row['date']} • {row['time_slot']} • {row['type']} • {row['status']}"
+        options[label] = int(row["id"])
+
+    with st.container(border=True):
+        st.markdown("### ⚙️ Manage Appointment")
+        selected_label = st.selectbox("Select an appointment", list(options.keys()))
+        appt_id = int(options[selected_label])
+
+        current_status = str(df.loc[df["id"] == appt_id, "status"].iloc[0])
+
+        c1, c2 = st.columns(2)
+        with c1:
+            cancel = st.button(
+                "Cancel appointment",
+                key="appt_cancel",
+                disabled=current_status != "Scheduled",
+                **_wide_kwargs(st.button),
+            )
+        with c2:
+            complete = st.button(
+                "Mark as completed",
+                key="appt_complete",
+                disabled=current_status != "Scheduled",
+                **_wide_kwargs(st.button),
+            )
+
+        if cancel:
+            ok, msg = cancel_appointment(appointment_id=appt_id, user_email=email)
+            (st.success if ok else st.error)(msg)
+            _rerun()
+
+        if complete:
+            ok, msg = complete_appointment(appointment_id=appt_id, user_email=email)
+            (st.success if ok else st.error)(msg)
+            _rerun()
+
+
+def page_support() -> None:
+    st.markdown("## 🤝 Support")
+    st.caption("Resources and emergency tools (simulated).")
+
+    user = st.session_state.get("user") or {}
+    user_id = int(st.session_state["user_id"])
+    reading = st.session_state.get("latest_reading") or _get_latest_reading_from_db(user_id)
+
+    if reading is not None and str(reading.get("status")) == "HIGH":
+        urgent = float(reading.get("stress_index", 0.0)) > STRESS_THRESHOLD_SEVERE
+        if urgent:
+            st.error("Urgent consultation recommended.")
+        else:
+            st.warning("Elevated stress detected. Consider booking a consultation.")
+        if st.button("👉 Book Now", key="support_book_now", **_wide_kwargs(st.button)):
+            st.session_state["nav_private"] = "📅 Book Appointment"
+            _rerun()
+
+    c1, c2 = st.columns([1.2, 1.0])
+
+    with c1:
+        st.markdown(
+            """
+            <div class="nn-card">
+              <h4>🌿 Mental Wellness Tips</h4>
+              <div class="nn-sub">Simple habits can reduce daily stress.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        st.write("• 60-second breathing reset between tasks")
+        st.write("• Short walk + hydration break")
+        st.write("• Reduce caffeine late in the day")
+        st.write("• Keep sleep schedule consistent")
+
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div class="nn-card">
+              <h4>🧭 When to Seek Help</h4>
+              <div class="nn-sub">Reach out if symptoms persist or worsen.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        st.write("• Persistent anxiety / low mood")
+        st.write("• Sleep disruption affecting daily function")
+        st.write("• Difficulty coping with responsibilities")
+        st.write("• Thoughts of self-harm — seek immediate help")
+
+    with c2:
+        contact = str(user.get("emergency_contact", "")).strip()
+        with st.container(border=True):
+            st.markdown("### 🚨 Emergency Contact")
+            st.write(contact if contact else "(Not set)")
+
+            if st.button("Send Emergency Alert (Simulated)", key="support_emergency", **_wide_kwargs(st.button)):
+                st.session_state["emergency_last_sent"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                st.success(f"Simulated alert sent to: **{contact}**")
+
+            last_sent = st.session_state.get("emergency_last_sent")
+            if last_sent:
+                st.caption(f"Last simulated alert: {last_sent}")
+
+        if reading is not None:
+            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+            badge(f"Current: {reading['status']} • {reading['severity']}", emoji=reading.get("badge", "🧠"))
+
+
+def page_resources() -> None:
+    # Backwards-compatible alias (Support is the main destination in navigation).
+    page_support()
 
 
 def page_resources() -> None:
@@ -1055,11 +1466,10 @@ def sidebar_nav() -> str:
     # Authenticated: render a top navigation bar with a hamburger menu.
     nav_items = [
         "🏠 Dashboard",
-        "🎛️ Manual Simulation",
-        "🧑‍⚕️ Consulting",
-        "🚨 Emergency",
         "🕒 History",
-        "📚 Resources",
+        "📅 Book Appointment",
+        "📋 My Appointments",
+        "🤝 Support",
     ]
 
     current = str(st.session_state.get("nav_private", "🏠 Dashboard"))
@@ -1134,20 +1544,17 @@ def main() -> None:
     if page == "🏠 Dashboard":
         page_dashboard()
         return
-    if page == "🎛️ Manual Simulation":
-        page_simulation()
-        return
-    if page == "🧑‍⚕️ Consulting":
-        page_consulting()
-        return
-    if page == "🚨 Emergency":
-        page_emergency()
-        return
     if page == "🕒 History":
         page_history()
         return
-    if page == "📚 Resources":
-        page_resources()
+    if page == "📅 Book Appointment":
+        page_book_appointment()
+        return
+    if page == "📋 My Appointments":
+        page_my_appointments()
+        return
+    if page == "🤝 Support":
+        page_support()
         return
 
     page_dashboard()
