@@ -649,7 +649,6 @@ def inject_css() -> None:
                     #MainMenu { visibility: hidden; }
                     footer { visibility: hidden; }
                     header { visibility: hidden; }
-                    [data-testid="collapsedControl"] { display: none; }
 
           /* Cards */
           .nn-card {
@@ -1463,7 +1462,7 @@ def sidebar_nav() -> str:
     if not st.session_state.get("authenticated"):
         return str(st.session_state.get("nav_public", "🔐 Login"))
 
-    # Authenticated: render a top navigation bar with a hamburger menu.
+    # Authenticated: sidebar navigation.
     nav_items = [
         "🏠 Dashboard",
         "🕒 History",
@@ -1472,48 +1471,27 @@ def sidebar_nav() -> str:
         "🤝 Support",
     ]
 
-    current = str(st.session_state.get("nav_private", "🏠 Dashboard"))
+    current = str(st.session_state.get("nav_private", nav_items[0]))
     if current not in nav_items:
-        current = "🏠 Dashboard"
-        st.session_state["nav_private"] = current
+        st.session_state["nav_private"] = nav_items[0]
+
+    st.sidebar.markdown(f"# 🧠 {APP_TITLE}")
+    st.sidebar.caption(APP_TAGLINE)
+    st.sidebar.markdown("---")
 
     user = st.session_state.get("user") or {}
+    st.sidebar.markdown(f"**Signed in**\n\n{user.get('name','')}")
+    st.sidebar.caption(user.get("email", ""))
+    st.sidebar.markdown("---")
 
-    with st.container(border=True):
-        c1, c2, c3 = st.columns([0.12, 0.60, 0.28])
+    current = st.sidebar.radio("Navigate", nav_items, key="nav_private")
 
-        with c1:
-            if hasattr(st, "popover"):
-                with st.popover("☰"):
-                    st.caption("Navigation")
-                    for item in nav_items:
-                        if st.button(item, key=f"nav_{item}", **_wide_kwargs(st.button)):
-                            st.session_state["nav_private"] = item
-                            _rerun()
-                    st.markdown("---")
-                    if st.button("🚪 Logout", key="nav_logout", **_wide_kwargs(st.button)):
-                        logout()
-                        _rerun()
-            else:  # Fallback for older Streamlit
-                with st.expander("☰ Menu", expanded=False):
-                    for item in nav_items:
-                        if st.button(item, key=f"nav_{item}", **_wide_kwargs(st.button)):
-                            st.session_state["nav_private"] = item
-                            _rerun()
-                    st.markdown("---")
-                    if st.button("🚪 Logout", key="nav_logout", **_wide_kwargs(st.button)):
-                        logout()
-                        _rerun()
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🚪 Logout", **_wide_kwargs(st.sidebar.button)):
+        logout()
+        _rerun()
 
-        with c2:
-            st.markdown(f"**{APP_TITLE}**")
-            st.caption(current)
-
-        with c3:
-            st.markdown(f"**{user.get('name','')}**")
-            st.caption(user.get("email", ""))
-
-    return current
+    return str(current)
 
 
 def main() -> None:
@@ -1523,13 +1501,10 @@ def main() -> None:
     ensure_session_state()
     inject_css()
 
-    # We use an in-app hamburger menu for navigation.
-    st.markdown('<style>section[data-testid="stSidebar"]{display:none;}</style>', unsafe_allow_html=True)
-
     if not st.session_state.get("authenticated"):
         # Public auth screens should look like a real login page (no sidebar navigation).
         st.markdown(
-            '<style>section[data-testid="stSidebar"]{display:none;}</style>',
+            '<style>section[data-testid="stSidebar"]{display:none;}[data-testid="collapsedControl"]{display:none;}</style>',
             unsafe_allow_html=True,
         )
         page = sidebar_nav()
